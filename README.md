@@ -11,11 +11,25 @@ Nan Jiang, Daniel U. Becker, George Michelogiannakis, James Balfour, Brian Towle
 
 ### Trace-driven simulation quickstart
 
-Trace replay support (JSON traces + optional node-ID maps) is now documented under `Booksim_3D_NoC/docs/trace_workloads.md`, with the implementation plan captured in `Booksim_3D_NoC/docs/jsontrace_plan.md`. Follow that guide to:
+BookSim now supports replaying JSON traces so recorded workloads can drive the network instead of purely synthetic traffic. The feature includes:
 
-- Run the existing synthetic benchmark on the enlarged 7×7×7 mesh (`./booksim injection_rate=… examples/.../m3`).
-- Enable the flash-attention trace via the clearer CLI (`./booksim … sim_type=trace workload=jsontrace jsontrace_file=… jsontrace_map_file=…`); the bundled map is now an identity because the topology exposes enough nodes for every ID in the trace. Decompress the shipped `*.jsonl.xz` traces first (`xz -dk traces/flash_attn_base.jsonl.xz`).
-- Inspect the “Overall …” stats section (including the new “Trace packets consumed …” lines) in each log and understand the expected differences between synthetic and trace-driven traffic.
+- the `jsontrace` workload (streams JSONL traces and injects whole packets),
+- optional node-ID map files so traces can be remapped onto any topology,
+- a trace-run mode (`sim_type=trace`) that replays a trace end-to-end without the warm-up/sample loop.
+
+Quick start (using the bundled flash-attention sample):
+
+```
+cd Booksim_3D_NoC/src
+xz -dk traces/flash_attn_base.jsonl.xz
+./booksim examples/3D_Mesh_BFT/1_3D_Mesh/m3 \
+  sim_type=trace \
+  workload=jsontrace \
+  jsontrace_file=traces/flash_attn_base.jsonl \
+  jsontrace_map_file=traces/flash_attn.map.json > trace_run.log
+```
+
+`trace_run.log` ends with the usual “Overall …” block plus “Trace packets consumed …” lines summarizing the replay. For detailed instructions (preparing traces, using packet limits, interpreting logs, etc.) see `Booksim_3D_NoC/docs/trace_workloads.md`. Design notes live in `Booksim_3D_NoC/docs/jsontrace_plan.md`.
 
 -----------------------------------------------------------------------------------------------------
 ## HotSpot 6.0
