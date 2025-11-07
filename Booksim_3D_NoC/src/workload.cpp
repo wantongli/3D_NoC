@@ -27,6 +27,8 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <limits>
+#include <sstream>
 
 #include "workload.hpp"
 #include "random_utils.hpp"
@@ -43,6 +45,49 @@ Workload::~Workload()
   
 }
 
+static string _TrimString(string const & value)
+{
+  size_t start = 0;
+  while((start < value.size()) && isspace(value[start])) {
+    ++start;
+  }
+  size_t end = value.size();
+  while((end > start) && isspace(value[end - 1])) {
+    --end;
+  }
+  if(end <= start) {
+    return "";
+  }
+  return value.substr(start, end - start);
+}
+
+static vector<string> _ParseParamList(string const & param_str)
+{
+  vector<string> params;
+  string trimmed = _TrimString(param_str);
+  if(trimmed.empty()) {
+    return params;
+  }
+  if(trimmed[0] == '{') {
+    return tokenize_str(trimmed);
+  }
+  string token;
+  string current;
+  stringstream ss(trimmed);
+  while(getline(ss, token, ',')) {
+    token = _TrimString(token);
+    if(!token.empty()) {
+      params.push_back(token);
+    } else {
+      params.push_back("");
+    }
+  }
+  if(params.empty()) {
+    params.push_back(trimmed);
+  }
+  return params;
+}
+
 Workload * Workload::New(string const & workload, int nodes,
 			 Configuration const * const config)
 {
@@ -50,18 +95,18 @@ Workload * Workload::New(string const & workload, int nodes,
   string param_str;
   size_t left = workload.find_first_of('(');
   if(left == string::npos) {
-    cout << "Error: Missing parameter in workload specification: " << workload
-	 << endl;
-    exit(-1);
-  }
-  workload_name = workload.substr(0, left);
-  size_t right = workload.find_last_of(')');
-  if(right == string::npos) {
-    param_str = workload.substr(left+1);
+    workload_name = workload;
   } else {
-    param_str = workload.substr(left+1, right-left-1);
+    workload_name = workload.substr(0, left);
+    size_t right = workload.find_last_of(')');
+    if(right == string::npos) {
+      param_str = workload.substr(left+1);
+    } else {
+      param_str = workload.substr(left+1, right-left-1);
+    }
   }
-  vector<string> params = tokenize_str(param_str);
+  workload_name = _TrimString(workload_name);
+  vector<string> params = _ParseParamList(param_str);
   
   Workload * result = NULL;
   if(workload_name == "null") {
@@ -101,6 +146,38 @@ Workload * Workload::New(string const & workload, int nodes,
       }
     }
     result = new TraceWorkload(nodes, filename, packet_sizes, limit, skip, scale);
+  } else if(workload_name == "jsontrace") {
+    string trace_file = (params.size() > 0) ? params[0]
+      : (config ? config->GetStr("jsontrace_file") : "");
+    if(trace_file.empty()) {
+      cout << "Error: Missing JSON trace filename in workload definition: "
+	   << workload << endl;
+      exit(-1);
+    }
+    string map_file = (params.size() > 1) ? params[1]
+      : (config ? config->GetStr("jsontrace_map_file") : "");
+    long long limit = -1ll;
+    if(params.size() > 2) {
+      limit = atoll(params[2].c_str());
+    } else if(config) {
+      int cfg_limit = config->GetInt("trace_packet_limit");
+      if(cfg_limit < 0) {
+	cfg_limit = config->GetInt("jsontrace_limit");
+      }
+      limit = (cfg_limit < -1) ? -1ll : cfg_limit;
+    }
+    if(limit < -1ll) {
+      limit = -1ll;
+    }
+    unsigned int scale = 1;
+    if(params.size() > 3) {
+      int parsed_scale = atoi(params[3].c_str());
+      scale = (parsed_scale <= 0) ? 1 : (unsigned int)parsed_scale;
+    } else if(config) {
+      int parsed_scale = config->GetInt("jsontrace_scale");
+      scale = (parsed_scale <= 0) ? 1 : (unsigned int)parsed_scale;
+    }
+    result = new JsonTraceWorkload(nodes, trace_file, map_file, limit, scale);
   } else if(workload_name == "netrace") {
     if(params.size() < 1) {
       cout << "Error: Missing parameter in trace workload definition: "
@@ -463,6 +540,138 @@ void TraceWorkload::printStats(ostream & os) const
 {
   os << "Packets read from trace = " << _count << endl;
   os << "Future packets = " << ((_next_source < 0) ? 0 : 1) << endl;
+  int pend_count = 0;
+  for(int n = 0; n < _nodes; ++n) {
+    pend_count += _ready_packets[n].size();
+  }
+  os << "Packets pending injection = " << pend_count << endl;
+}
+
+// === JSON trace workload implementation =================================
+
+JsonTraceWorkload::JsonTraceWorkload(int nodes, string const & filename,
+				     string const & mapfile, long long limit,
+				     unsigned int scale)
+  : Workload(nodes), _time(0ull), _reader(NULL), _has_next_packet(false)
+{
+  _ready_packets.resize(nodes);
+  _reader = new JsonTraceReader(filename, mapfile, limit, scale, nodes);
+  _PrimeNext();
+  _DrainReady();
+}
+
+JsonTraceWorkload::~JsonTraceWorkload()
+{
+  if(_reader) {
+    delete _reader;
+  }
+}
+
+void JsonTraceWorkload::_PrimeNext()
+{
+  if(_has_next_packet) {
+    return;
+  }
+  if(_reader->NextPacket(&_next_packet)) {
+    _has_next_packet = true;
+  } else {
+    _has_next_packet = false;
+  }
+}
+
+void JsonTraceWorkload::_DrainReady()
+{
+  while(_has_next_packet && (_next_packet.time <= _time)) {
+    int const source = _next_packet.source;
+    assert((source >= 0) && (source < _nodes));
+    if(_ready_packets[source].empty()) {
+      _pending_nodes.push(source);
+      assert(_pending_nodes.size() <= (size_t)_nodes);
+    }
+    _ready_packets[source].push(_next_packet);
+    _has_next_packet = false;
+    _PrimeNext();
+  }
+}
+
+void JsonTraceWorkload::reset()
+{
+  Workload::reset();
+  _time = 0ull;
+  for(int n = 0; n < _nodes; ++n) {
+    queue<JsonTracePacket> empty;
+    swap(_ready_packets[n], empty);
+  }
+  _has_next_packet = false;
+  _reader->Reset();
+  _PrimeNext();
+  _DrainReady();
+}
+
+void JsonTraceWorkload::advanceTime()
+{
+  Workload::advanceTime();
+  ++_time;
+  _DrainReady();
+}
+
+bool JsonTraceWorkload::completed() const
+{
+  return (_pending_nodes.empty() && _deferred_nodes.empty() &&
+	  !_has_next_packet);
+}
+
+int JsonTraceWorkload::dest() const
+{
+  assert(!_pending_nodes.empty());
+  int const source = _pending_nodes.front();
+  assert((source >= 0) && (source < _nodes));
+  assert(!_ready_packets[source].empty());
+  int const dest = _ready_packets[source].front().dest;
+  assert((dest >= 0) && (dest < _nodes));
+  return dest;
+}
+
+int JsonTraceWorkload::size() const
+{
+  assert(!_pending_nodes.empty());
+  int const source = _pending_nodes.front();
+  assert((source >= 0) && (source < _nodes));
+  assert(!_ready_packets[source].empty());
+  int const size = (int)_ready_packets[source].front().size;
+  assert(size > 0);
+  return size;
+}
+
+int JsonTraceWorkload::time() const
+{
+  assert(!_pending_nodes.empty());
+  int const source = _pending_nodes.front();
+  assert((source >= 0) && (source < _nodes));
+  assert(!_ready_packets[source].empty());
+  unsigned long long const ready_time = _ready_packets[source].front().time;
+  assert(ready_time <= (unsigned long long)numeric_limits<int>::max());
+  return (int)ready_time;
+}
+
+void JsonTraceWorkload::inject(int pid)
+{
+  assert(!_pending_nodes.empty());
+  int const source = _pending_nodes.front();
+  assert((source >= 0) && (source < _nodes));
+  _pending_nodes.pop();
+  assert(!_ready_packets[source].empty());
+  _ready_packets[source].pop();
+  if(!_ready_packets[source].empty()) {
+    _deferred_nodes.push(source);
+    assert(_deferred_nodes.size() <= (size_t)_nodes);
+  }
+}
+
+void JsonTraceWorkload::printStats(ostream & os) const
+{
+  os << "Trace packets consumed = " << _reader->packets_read() << endl;
+  os << "Future packets buffered = " << (_has_next_packet ? 1 : 0) << endl;
   int pend_count = 0;
   for(int n = 0; n < _nodes; ++n) {
     pend_count += _ready_packets[n].size();

@@ -37,6 +37,7 @@
 
 #include "injection.hpp"
 #include "traffic.hpp"
+#include "jsontrace_loader.hpp"
 
 extern "C" {
 #include "netrace/netrace.h"
@@ -149,6 +150,40 @@ public:
   virtual int time() const;
   virtual void inject(int pid);
   virtual void retire(int pid);
+  virtual void printStats(ostream & os) const;
+};
+
+// === JSON trace support ===============================================
+
+class JsonTraceWorkload : public Workload {
+
+protected:
+
+  unsigned long long _time;
+
+  vector< queue<JsonTracePacket> > _ready_packets;
+  JsonTraceReader * _reader;
+  JsonTracePacket _next_packet;
+  bool _has_next_packet;
+
+  void _PrimeNext();
+  void _DrainReady();
+
+public:
+
+  JsonTraceWorkload(int nodes, string const & filename,
+		    string const & mapfile, long long limit = -1ll,
+		    unsigned int scale = 1);
+  virtual ~JsonTraceWorkload();
+
+  virtual void reset();
+  virtual void advanceTime();
+  virtual bool completed() const;
+  virtual int dest() const;
+  virtual int size() const;
+  virtual int time() const;
+  virtual void inject(int pid);
+  virtual void retire(int pid) {}
   virtual void printStats(ostream & os) const;
 };
 

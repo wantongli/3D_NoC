@@ -36,6 +36,7 @@ WorkloadTrafficManager::WorkloadTrafficManager( const Configuration &config,
   _sample_period = config.GetInt( "sample_period" );
   _max_samples    = config.GetInt( "max_samples" );
   _warmup_periods = config.GetInt( "warmup_periods" );
+  _trace_driven = (config.GetInt("trace_driven") > 0);
 
   vector<string> workload = config.GetStrArray("workload");
   workload.resize(_classes, workload.back());
@@ -94,6 +95,20 @@ void WorkloadTrafficManager::_ResetSim( )
 
 bool WorkloadTrafficManager::_SingleSim( )
 {
+  if(_trace_driven) {
+    cout << "Replaying trace-driven workload..." << endl;
+    _sim_state = running;
+    while(!_Completed()) {
+      _Step();
+    }
+    cout << "Completed trace replay after " << _time << " cycles." << endl;
+    UpdateStats();
+    DisplayStats();
+    _sim_state = draining;
+    _drain_time = _time;
+    return 1;
+  }
+
   _sim_state = warming_up;
   
   if(_warmup_periods > 0) {

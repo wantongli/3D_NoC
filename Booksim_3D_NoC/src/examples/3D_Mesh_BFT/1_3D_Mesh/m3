@@ -24,17 +24,17 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//8X8 mesh with 20 flits per packet under injection mode
+//7x7x7 mesh sized to cover traces with up to 272 unique node IDs
 //injection rate here is packet per cycle, NOT flit per cycle
 
 // Topology
 
 topology = mesh;
-k = 4; // xradix
+k = 7; // xradix per dimension (k^n = 343 nodes)
 n = 3; // dim
-_x= 4; // xradix
-_y= 4; // y radix
-_z= 4; // z radix
+_x= 7; // xradix
+_y= 7; // y radix
+_z= 7; // z radix
 // Routing
 routing_function = dor;
 
@@ -69,4 +69,3 @@ packet_size = 5;
 sim_type = latency;
 
 //injection_rate = 0.0002;
-

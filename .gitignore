@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+# Large trace dumps (compressed versions tracked instead)
+*.jsonl

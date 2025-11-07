@@ -46,6 +46,7 @@ protected:
   vector<Workload *> _workload;
 
   int _overall_runtime;
+  bool _trace_driven;
 
   virtual void _Inject( );
   virtual void _RetirePacket( Flit * head, Flit * tail );

@@ -231,6 +231,12 @@ AddStrField("TPtrace", "TPtrace.txt");
   AddStrField( "sim_type", "latency" );
 
   AddStrField( "workload", "synthetic({0.1,1,bernoulli,uniform})" );
+  AddStrField( "jsontrace_file", "" );
+  AddStrField( "jsontrace_map_file", "" );
+  _int_map["jsontrace_limit"] = -1;
+  _int_map["trace_packet_limit"] = -1;
+  _int_map["jsontrace_scale"] = 1;
+  _int_map["trace_driven"] = 0;
 
   _int_map["warmup_periods"] = 3; // number of samples periods to "warm-up" the simulation
 

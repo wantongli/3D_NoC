@@ -169,6 +169,16 @@ int main( int argc, char **argv )
     return 0;
  } 
 
+  string sim_type = config.GetStr("sim_type");
+  if(sim_type == "trace") {
+    config.ParseString("sim_type=workload");
+    config.ParseString("trace_driven=1");
+    config.ParseString("warmup_periods=0");
+    config.ParseString("max_samples=1");
+    config.ParseString("sample_period=1");
+    config.ParseString("sim_count=1");
+  }
+
   
   /*initialize routing, traffic, injection functions
    */

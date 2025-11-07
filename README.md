@@ -9,6 +9,14 @@ If you use BookSim in your research, we would appreciate the following citation 
 
 Nan Jiang, Daniel U. Becker, George Michelogiannakis, James Balfour, Brian Towles, John Kim and William J. Dally. A Detailed and Flexible Cycle-Accurate Network-on-Chip Simulator. In Proceedings of the 2013 IEEE International Symposium on Performance Analysis of Systems and Software, 2013.
 
+### Trace-driven simulation quickstart
+
+Trace replay support (JSON traces + optional node-ID maps) is now documented under `Booksim_3D_NoC/docs/trace_workloads.md`, with the implementation plan captured in `Booksim_3D_NoC/docs/jsontrace_plan.md`. Follow that guide to:
+
+- Run the existing synthetic benchmark on the enlarged 7×7×7 mesh (`./booksim injection_rate=… examples/.../m3`).
+- Enable the flash-attention trace via the clearer CLI (`./booksim … sim_type=trace workload=jsontrace jsontrace_file=… jsontrace_map_file=…`); the bundled map is now an identity because the topology exposes enough nodes for every ID in the trace. Decompress the shipped `*.jsonl.xz` traces first (`xz -dk traces/flash_attn_base.jsonl.xz`).
+- Inspect the “Overall …” stats section (including the new “Trace packets consumed …” lines) in each log and understand the expected differences between synthetic and trace-driven traffic.
+
 -----------------------------------------------------------------------------------------------------
 ## HotSpot 6.0
 -----------------------------------------------------------------------------------------------------
