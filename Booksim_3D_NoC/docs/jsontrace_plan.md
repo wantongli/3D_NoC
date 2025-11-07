@@ -1,43 +1,36 @@
 # JSON Trace Workload – Feature & Implementation Plan
 
-## Goal
-Add first-class support for replaying JSON trace files (for example `traces/flash_attn_base.jsonl`) through BookSim’s `WorkloadTrafficManager`, including an optional mapping from sparse trace node IDs to the simulator’s dense node index space.
+## Summary
+Replay JSON trace files through BookSim’s workload traffic manager so recorded workloads can drive the simulator. Traces are read incrementally, packets are emitted only when complete, optional node-ID maps remap trace IDs onto the target topology, and a trace-specific simulation mode reuses the existing WorkloadTrafficManager without the synthetic warm-up loop.
 
-## Scope
-- Introduce a new workload type `jsontrace(...)` that can be selected via the existing `workload` configuration string.
-- Stream `.jsonl` traces and emit whole-packet descriptors without buffering the entire trace.
-- Accept an optional node-ID mapping file so traces with IDs up to 268 can run on smaller topologies (e.g., 64-node meshes).
-- Ship a sample map plus documentation explaining how to run both the synthetic and trace-driven workloads and how to interpret their outputs.
+## Architecture
 
-## Implementation Steps
+### Configuration and entry point
+- `booksim_config.cpp` exposes `jsontrace_file`, `jsontrace_map_file`, `jsontrace_limit`, `jsontrace_scale`, and `trace_driven`.
+- When `sim_type=trace` is parsed, `main.cpp` forces `trace_driven=1`, `sim_count=1`, and disables warm-up/sample loops so the trace runs once, end-to-end.
+- `Workload::New` recognizes `workload=jsontrace`, parses optional inline parameters, and falls back to config defaults.
 
-1. **Configuration Plumbing**
-   - Extend `booksim_config.cpp` with `jsontrace_file`, `jsontrace_map_file`, `jsontrace_limit`, `jsontrace_scale`, and a `trace_driven` flag (default `0`).
-   - Update `Workload::New` in `workload.cpp` so `workload=jsontrace` (with or without parentheses/braces) is accepted, falling back to the `jsontrace_*` config keys whenever parameters are omitted.
-   - Recognize `sim_type=trace` in `main.cpp`, automatically switch to the workload traffic manager, enable `trace_driven`, and disable warm-up/sample loops for trace replays.
+### Trace reader (`jsontrace_loader.{hpp,cpp}`)
+- Streams `.jsonl` files line by line, tracking flits until `tail=true` and then emitting a `JsonTracePacket {time, source, dest, size, class, packet_id}`.
+- Supports optional node-ID maps: JSON dictionaries of `original_id -> mapped_id`. The loader validates every ID in the trace against the map (if provided) or against `_nodes`.
+- Handles multicast entries (`dest_ids`) by cloning one packet per destination (with a one-time warning). Keeps at most one packet buffered at a time.
 
-2. **Mapping & Trace Reader**
-   - Create `jsontrace_loader.{hpp,cpp}` with a lightweight parser that:
-     - Loads an optional JSON dictionary mapping (original ID → simulator ID) and validates mapped IDs are within `[0, _nodes)`.
-     - Streams the `.jsonl` trace line by line, tracking flits until `tail=true` to emit `JsonTracePacket {time, source, dest, size, class, packet_id}` records. Only one packet is buffered at a time and multicast records that use `dest_ids` are replicated into one unicast packet per destination (with a one-time warning).
-     - Provides `NextPacket` and `Reset` helpers plus descriptive error messages for malformed traces or unmapped IDs.
+### JsonTraceWorkload (`workload.cpp/.hpp`)
+- Mirrors `TraceWorkload`: maintains per-source queues, `_pending_nodes`, and `_deferred_nodes`.
+- Pulls packets from the reader, enqueues those whose timestamps are <= current sim time, and exposes `dest()`, `size()`, and `time()` to `WorkloadTrafficManager`.
+- `printStats` reports packets consumed, future packets buffered, and per-source pending counts.
 
-3. **`JsonTraceWorkload`**
-   - Implement a new workload class (modeled after `TraceWorkload`) that:
-     - Maintains per-source queues, `_pending_nodes`, and `_deferred_nodes`.
-     - Requests packets from the reader, enqueues any whose (scaled) timestamps match the current simulation time, and exposes `dest/size/time` to `WorkloadTrafficManager`.
-     - Offers `printStats` summaries (`packets_read`, pending queues, whether future packets remain).
+### Workload traffic manager (`workloadtrafficmanager.{hpp,cpp}`)
+- Stores `_trace_driven`, and when set, skips the warm-up loop: it simply runs `_Step()` until `_Completed()` and then drains.
 
-4. **Artifacts & Documentation**
-   - Add `src/traces/flash_attn.map.json`, mapping the 38 IDs present in `flash_attn_base.jsonl` to a contiguous 0–37 range so it fits within the 64-node 3D mesh.
-   - Document how to run:
-     - Synthetic baseline (`./booksim injection_rate=1e-4 examples/.../m3`).
-     - Trace workload (`./booksim examples/.../m3 sim_type=trace workload=jsontrace jsontrace_file=… jsontrace_map_file=…`), including explanations of the new command-line overrides.
-   - Explain how to inspect the “Overall …” block in the logs and what to expect from synthetic (steady) vs. trace-driven (bursty) runs.
-   - Capture production notes: keep large traces out of git (or use LFS), version-control map files, and add regression scripts where practical.
+### Artifacts and docs
+- `traces/flash_attn_base.jsonl.xz` / `flash_attn_sample.jsonl.xz`: sample traces kept compressed to stay under Git/GitHub limits.
+- `traces/flash_attn.map.json`: example identity map; replace or regenerate as needed to match your trace + topology.
+- `docs/trace_workloads.md`: how to run the synthetic baseline and trace workloads, including decompression, packet limits, log inspection, etc.
+- `docs/jsontrace_plan.md`: this design summary.
 
-5. **Validation**
-   - Rebuild BookSim, rerun the synthetic workload to ensure behavior matches previous baselines.
-   - Run the JSON trace workload (possibly with a reduced `sim_count`) to confirm packets inject correctly and that the mapper prevents out-of-range node references.
-
-This document doubles as the high-level design reference so future contributors can confirm that the implementation matches the intended behavior.
+## Validation Workflow
+1. Build BookSim and run the synthetic baseline (`./booksim … injection_rate=… examples/.../m3`) to ensure the topology behaves as expected.
+2. Decompress a JSON trace (`xz -dk traces/<trace>.jsonl.xz`) and run it with `sim_type=trace workload=jsontrace …`.
+3. Confirm `trace_run.log` ends with `Trace packets consumed = …` and `Packets pending injection = 0`.
+4. Adjust `trace_packet_limit`/`jsontrace_scale` or the mapping file as needed for other experiments.
